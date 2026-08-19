@@ -34,9 +34,9 @@ func CheckDocker(ctx context.Context) error {
 	out, err := runCapture(probeCtx, "docker", "version", "--format", "{{.Server.Version}}")
 	if err != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {
-			return fmt.Errorf("docker 不可用: %s", msg)
+			return fmt.Errorf("docker 不可用: %s\n请确认 Docker 已启动(Windows/macOS 打开 Docker Desktop 并等待就绪;Linux 启动 dockerd 服务)", msg)
 		}
-		return fmt.Errorf("docker 不可用,请确认已安装且 daemon 已启动")
+		return fmt.Errorf("docker 不可用:未找到 docker 命令或 daemon 未运行(Windows 请打开 Docker Desktop)")
 	}
 	return nil
 }

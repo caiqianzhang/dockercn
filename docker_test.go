@@ -95,6 +95,9 @@ func TestCheckDockerUnavailableWithMessage(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "Cannot connect to the Docker daemon") {
 		t.Fatalf("期望错误包含 stderr 信息,实际: %v", err)
 	}
+	if !strings.Contains(err.Error(), "Docker Desktop") {
+		t.Fatalf("期望错误含可操作提示(Docker Desktop),实际: %v", err)
+	}
 }
 
 func TestDetectArchFromDockerInfo(t *testing.T) {
