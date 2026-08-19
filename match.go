@@ -141,3 +141,42 @@ func FilterPlatform(results []Result, platform string) []Result {
 	}
 	return matched
 }
+
+// mirrorQuality 返回镜像记录的可读性得分:0 = 优(docker.io 显式写法);
+// 1 = 劣(带 library/ 前缀,是同一镜像的另一种同步写法)。
+func mirrorQuality(r Result) int {
+	src, err := ParseImageRef(r.Source)
+	if err != nil {
+		return 1
+	}
+	if strings.HasPrefix(src.Name, "library/") {
+		return 1
+	}
+	return 0
+}
+
+// DedupeMirrors 合并同一镜像的冗余 mirror 记录:源仓库+tag+平台相同视为同一镜像,
+// 只保留一个代表;优先保留 Source 不带 library/ 前缀的记录。
+// 同步站常把同一镜像同时同步成 docker.io/x 与 docker.io/library/x 两条记录,
+// 若不合并,「唯一候选」判定将永远失败,--yes 无法使用。
+func DedupeMirrors(results []Result) []Result {
+	out := make([]Result, 0, len(results))
+	idx := map[string]int{}
+	for _, r := range results {
+		src, err := ParseImageRef(r.Source)
+		if err != nil {
+			out = append(out, r)
+			continue
+		}
+		key := canonicalName(src.Registry, src.Name) + ":" + src.Tag + "#" + r.Platform
+		if j, ok := idx[key]; ok {
+			if mirrorQuality(r) < mirrorQuality(out[j]) {
+				out[j] = r
+			}
+			continue
+		}
+		idx[key] = len(out)
+		out = append(out, r)
+	}
+	return out
+}

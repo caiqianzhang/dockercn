@@ -96,6 +96,9 @@ func runPull(ctx context.Context, args []string) int {
 
 	allName := candidates
 	candidates = FilterPlatform(candidates, plat)
+	// 合并同镜像(源仓库+tag+平台相同)的冗余 mirror 记录,否则 --yes 的「唯一」判定会因
+	// 同步站同时同步 docker.io/x 与 docker.io/library/x 而永远失败。
+	candidates = DedupeMirrors(candidates)
 	if len(candidates) == 0 {
 		fmt.Fprintln(uiErrWriter, noCandidateMessage(ref, allName, plat))
 		return 1

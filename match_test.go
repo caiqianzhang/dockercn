@@ -54,6 +54,32 @@ func TestCanonicalName(t *testing.T) {
 	}
 }
 
+func TestDedupeMirrors(t *testing.T) {
+	results := []Result{
+		{Source: "docker.io/library/alpine:3.20", Mirror: "m:lib", Platform: "linux/amd64"},
+		{Source: "docker.io/alpine:3.20", Mirror: "m:direct", Platform: "linux/amd64"},
+		{Source: "docker.io/alpine:3.20", Mirror: "m:arm", Platform: "linux/arm64"},
+		{Source: "docker.io/alpine:3.19", Mirror: "m:old", Platform: "linux/amd64"},
+	}
+	got := DedupeMirrors(results)
+	if len(got) != 3 {
+		t.Fatalf("同一镜像应合并为 1,期望 3 条,实际 %d: %+v", len(got), got)
+	}
+	// 同平台同 tag 的两条只保留不带 library/ 的那条
+	for _, r := range got {
+		if r.Platform == "linux/amd64" && r.Source == "docker.io/alpine:3.20" {
+			if r.Mirror != "m:direct" {
+				t.Fatalf("应优先保留不含 library/ 的镜像 m:direct,实际 %s → %s", r.Source, r.Mirror)
+			}
+		}
+	}
+	// 仅剩 library/ 记录时保留原样
+	only := DedupeMirrors([]Result{{Source: "docker.io/library/alpine:3.20", Mirror: "m:lib", Platform: "linux/amd64"}})
+	if len(only) != 1 || only[0].Mirror != "m:lib" {
+		t.Fatalf("仅 library/ 记录应保留,实际: %+v", only)
+	}
+}
+
 func TestFilterCandidates(t *testing.T) {
 	results := []Result{
 		{Source: "docker.io/node:18-alpine", Platform: "linux/amd64"},

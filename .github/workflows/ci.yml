@@ -72,3 +72,5 @@ jobs:
           chmod +x "${{ matrix.artifact }}"
           ./"${{ matrix.artifact }}" version
           ./"${{ matrix.artifact }}" help
+          # 真实请求一次 API,验证 TLS/网络链路在目标平台可用
+          ./"${{ matrix.artifact }}" search node --platform linux/amd64 >/dev/null

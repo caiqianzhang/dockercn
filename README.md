@@ -51,9 +51,11 @@ dockercn version
 
 1. **解析镜像名**:拆出 registry(可选)/ namespace / name / tag;无 registry 前缀视为 `docker.io`。`node:22-alpine`、`library/node:22-alpine`、`docker.io/library/node:22-alpine` 被归一化为同一镜像。
 2. **查询同步站 API**:`GET https://docker.aityp.com/api/v1/image?search=<镜像名>`,返回已同步的国内 mirror 地址(`swr.cn-north-4.myhuaweicloud.com/ddn-k8s/...`)。
-3. **匹配与平台过滤**:指定 tag 时要求 tag 完全一致;未指定 tag 时名字一致即可。按本机架构(`docker info` 优先,回退 `uname -m`)过滤候选。
+3. **匹配与平台过滤**:指定 tag 时要求 tag 完全一致;未指定 tag 时名字一致即可。按本机架构(`docker info` 优先,回退 `uname -m`、再回退 Go 运行时)过滤候选。
 4. **拉取**:`docker pull <mirror> --platform=<arch>`。
 5. **重命名**:`docker tag <mirror> <原始名>` 加别名,再 `docker rmi <mirror>` 删除 mirror 标签——两个标签指向同一镜像 ID,只删标签不删数据。
+
+> 同步站常把同一镜像同时同步成 `docker.io/x` 与 `docker.io/library/x` 两条记录;工具会合并为同一条(优先不带 `library/` 的写法),避免「唯一候选」判定被冗余记录干扰。
 
 ## 退出码
 
@@ -71,7 +73,14 @@ dockercn version
 
 - 不支持 digest 寻址(`@sha256:...`),请使用 `名字:tag`。
 - 同步站不保证 `latest` 为最新,建议使用具体版本号。
-- `--yes` 仅在唯一候选时自动选择;多个候选时需去掉 `--yes` 或使用更精确的镜像名。
+- `--yes` 在合并冗余记录后仍匹配到多个候选(如同仓库多个 tag / 多个平台)时报错,需去掉 `--yes` 或使用更精确的镜像名。
+
+## 跨平台
+
+- 发布产物为**静态链接**二进制,可在目标平台直接运行;每次发版 CI 都会在 Linux(x86_64/arm64)、macOS、Windows 的真实环境跑一遍冒烟(`version`/`help`/真实 `search`)。
+- **Windows 旧版控制台(cmd)默认 GBK 码页**,中文输出可能乱码:请使用 Windows Terminal,或先执行 `chcp 65001`。
+- **Linux 精简容器(Alpine / scratch)运行静态二进制需已安装 `ca-certificates`**,否则访问 API 的 TLS 握手会失败。
+- 架构自动检测为三级回退(`docker info` → `uname -m` → Go 运行时),Windows 无 `uname` 也能可靠探测。
 
 ## 开发
 
@@ -83,7 +92,7 @@ make build      # 构建并注入版本号
 make release    # 跨平台产物到 dist/
 ```
 
-CI:push/PR 自动跑格式、vet、测试;打 `v*` 标签时自动 `make release` 并发布 GitHub Release(产物为 5 个跨平台二进制)。
+CI:push/PR 自动跑格式、vet、测试;打 `v*` 标签时自动 `make release` 发布 GitHub Release(5 个跨平台二进制),并在 Linux/macOS/Windows 真实平台跑冒烟验证。
 
 ## 项目结构
 

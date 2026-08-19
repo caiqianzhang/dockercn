@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"os/exec"
 	"runtime"
 	"slices"
 	"strings"
@@ -20,33 +19,16 @@ func TestMapArch(t *testing.T) {
 		"ppc64":       "linux/ppc64",
 		"ppc64le":     "linux/ppc64le",
 		"loongarch64": "linux/loong64",
+		"mips":        "linux/mips",
+		"mipsle":      "linux/mipsle",
+		"mips64":      "linux/mips64",
+		"mips64le":    "linux/mips64le",
 		"weird":       "",
 	}
 	for in, want := range cases {
 		if got := mapArch(in); got != want {
 			t.Errorf("mapArch(%q) = %q,期望 %q", in, got, want)
 		}
-	}
-}
-
-// fakeExec 记录发出的命令,并把每个子进程替换为 /bin/true(退出码 0)。
-func fakeExec(calls *[]string) func(context.Context, string, ...string) *exec.Cmd {
-	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		*calls = append(*calls, name+" "+strings.Join(args, " "))
-		return exec.CommandContext(ctx, "/bin/true")
-	}
-}
-
-// failingExec 对匹配 prefix 的命令返回一个必定启动失败的子进程,用于模拟 docker 报错。
-func failingExec(match string) func(context.Context, string, ...string) *exec.Cmd {
-	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		if strings.HasPrefix(strings.Join(args, " "), match) {
-			return &exec.Cmd{
-				Path: "/nonexistent-dockercn-test-cmd",
-				Args: append([]string{name}, args...),
-			}
-		}
-		return exec.CommandContext(ctx, "/bin/true")
 	}
 }
 

@@ -88,6 +88,14 @@ func mapArch(raw string) string {
 		return "linux/riscv64"
 	case "loong64", "loongarch64":
 		return "linux/loong64"
+	case "mips":
+		return "linux/mips"
+	case "mipsle":
+		return "linux/mipsle"
+	case "mips64":
+		return "linux/mips64"
+	case "mips64le":
+		return "linux/mips64le"
 	default:
 		return ""
 	}

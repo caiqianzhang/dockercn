@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -36,10 +35,7 @@ func setupFlow(t *testing.T, handler http.HandlerFunc) *flowEnv {
 	apiBase = e.srv.URL + "/api/v1"
 
 	oldExec, oldCapture := execCommand, runCapture
-	execCommand = func(ctx context.Context, name string, args ...string) *exec.Cmd {
-		e.execCalls = append(e.execCalls, name+" "+strings.Join(args, " "))
-		return exec.CommandContext(ctx, "/bin/true")
-	}
+	execCommand = fakeExec(&e.execCalls)
 	// docker version(CheckDocker)与 docker info(DetectArch)都当成功;
 	// 返回 x86_64 使 DetectArch 得到 linux/amd64。
 	runCapture = func(ctx context.Context, name string, args ...string) ([]byte, error) {
@@ -63,13 +59,25 @@ func setupFlow(t *testing.T, handler http.HandlerFunc) *flowEnv {
 // setInput 设置交互输入(可多行,如 "2\ny\n")。
 func (e *flowEnv) setInput(s string) { uiReader = strings.NewReader(s) }
 
-// amd64PairHandler 返回两个同平台(amd64)候选,触发候选选择流程。
+// amd64PairHandler 返回两个不同 tag 的 amd64 候选(同仓库不同 tag,不会被去重),
+// 用于无 tag 请求触发候选选择菜单。
 func amd64PairHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(resultsJSON(2, []Result{
-			{Source: "docker.io/node:22-alpine", Mirror: "swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22-alpine-a", Platform: "linux/amd64", Size: "48MB"},
-			{Source: "docker.io/node:22-alpine", Mirror: "swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22-alpine-b", Platform: "linux/amd64", Size: "49MB"},
+			{Source: "docker.io/node:22-alpine", Mirror: "swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22-alpine", Platform: "linux/amd64", Size: "48MB"},
+			{Source: "docker.io/node:22-alpine3.22", Mirror: "swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22-alpine3.22", Platform: "linux/amd64", Size: "49MB"},
+		})))
+	}
+}
+
+// dupMirrorHandler 返回同一镜像(library/ + 非 library/)的两条冗余记录,验证去重后 --yes 可用。
+func dupMirrorHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(resultsJSON(2, []Result{
+			{Source: "docker.io/library/node:22-alpine", Mirror: "m:lib", Platform: "linux/amd64"},
+			{Source: "docker.io/node:22-alpine", Mirror: "m:direct", Platform: "linux/amd64"},
 		})))
 	}
 }
@@ -102,7 +110,7 @@ func TestFlowPullCancel(t *testing.T) {
 	e := setupFlow(t, amd64PairHandler())
 	e.setInput("0\n")
 
-	code := runPull(context.Background(), []string{"node:22-alpine"})
+	code := runPull(context.Background(), []string{"node"})
 	if code != 0 {
 		t.Fatalf("取消应返回 0,实际 %d,err=%s", code, e.err.String())
 	}
@@ -118,23 +126,23 @@ func TestFlowPullChooseAndRename(t *testing.T) {
 	e := setupFlow(t, amd64PairHandler())
 	e.setInput("2\ny\n")
 
-	code := runPull(context.Background(), []string{"node:22-alpine"})
+	code := runPull(context.Background(), []string{"node"})
 	if code != 0 {
 		t.Fatalf("exit=%d,err=%s", code, e.err.String())
 	}
 	got := e.execCalls
-	if len(got) != 3 || !strings.Contains(got[0], "node:22-alpine-b") {
-		t.Fatalf("应拉取第 2 个候选,命令序列不符: %v", got)
+	if len(got) != 3 || !strings.Contains(got[0], "node:22-alpine3.22") {
+		t.Fatalf("应拉取第 2 个候选(22-alpine3.22),命令序列不符: %v", got)
 	}
-	if !strings.HasPrefix(got[1], "docker tag ") || !strings.HasSuffix(got[1], " node:22-alpine") {
-		t.Fatalf("期望重命名命令,实际: %v", got[1])
+	if !strings.HasPrefix(got[1], "docker tag ") || !strings.HasSuffix(got[1], " node") {
+		t.Fatalf("期望重命名命令(docker tag <mirror> node),实际: %v", got[1])
 	}
 }
 
 func TestFlowPullYesMultiple(t *testing.T) {
 	e := setupFlow(t, amd64PairHandler())
 
-	code := runPull(context.Background(), []string{"node:22-alpine", "--yes"})
+	code := runPull(context.Background(), []string{"node", "--yes"})
 	if code != 1 {
 		t.Fatalf("--yes 多候选应返回 1,实际 %d", code)
 	}
@@ -143,6 +151,25 @@ func TestFlowPullYesMultiple(t *testing.T) {
 	}
 	if !strings.Contains(e.err.String(), "--yes") {
 		t.Fatalf("期望提示 --yes,实际: %s", e.err.String())
+	}
+}
+
+// TestFlowPullUniqueAfterDedup 验证同步站把同一镜像同步成 library/ 与非 library/ 两条
+// 记录时,--yes 仍能认定「唯一」:去重后应拉取不带 library/ 的 mirror。
+func TestFlowPullUniqueAfterDedup(t *testing.T) {
+	e := setupFlow(t, dupMirrorHandler())
+
+	code := runPull(context.Background(), []string{"node:22-alpine", "--yes"})
+	if code != 0 {
+		t.Fatalf("去重后 --yes 应成功,实际 exit=%d,err=%s", code, e.err.String())
+	}
+	want := []string{
+		"docker pull --platform=linux/amd64 m:direct",
+		"docker tag m:direct node:22-alpine",
+		"docker rmi m:direct",
+	}
+	if !slices.Equal(e.execCalls, want) {
+		t.Fatalf("命令序列不符:\n  got  %v\n  want %v", e.execCalls, want)
 	}
 }
 
