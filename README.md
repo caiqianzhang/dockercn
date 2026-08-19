@@ -1,6 +1,6 @@
 # dockercn — 国内 Docker 镜像拉取助手
 
-![CI](https://github.com/caiqianzhang/gitcn/actions/workflows/ci.yml/badge.svg)
+![CI](https://github.com/caiqianzhang/dockercn/actions/workflows/ci.yml/badge.svg)
 
 `dockercn` 是一个纯 Go 标准库编写的命令行工具:自动查询「渡渡鸟容器同步站」的公共 API,找到镜像已同步到国内华为云 SWR 的地址,执行 `docker pull`,再把镜像重命名回你原本想写的名字。解决国内直连 Docker Hub / gcr.io / quay.io 等源拉取镜像困难的问题。
 
