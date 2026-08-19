@@ -257,6 +257,45 @@ func TestFlowSearchTruncationHint(t *testing.T) {
 	}
 }
 
+func TestFlowPullTagNotFound(t *testing.T) {
+	// 真实 API 行为:带不存在 tag 的查询返回空;纯名字查询才返回该镜像的记录。
+	e := setupFlow(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("search") == "node" {
+			w.Write([]byte(resultsJSON(1, []Result{{Source: "docker.io/node:22-alpine", Mirror: "m:node-22", Platform: "linux/amd64"}})))
+			return
+		}
+		w.Write([]byte(resultsJSON(0, nil)))
+	}))
+
+	code := runPull(context.Background(), []string{"node:9999", "--yes"})
+	if code != 1 {
+		t.Fatalf("tag 不存在应返回 1,实际 %d", code)
+	}
+	err := e.err.String()
+	if !strings.Contains(err, "没有 tag 9999 的版本") || !strings.Contains(err, "已同步 tag") {
+		t.Fatalf("期望区分 tag 未同步,实际: %s", err)
+	}
+	if strings.Contains(err, "未找到镜像") {
+		t.Fatalf("镜像已同步,不应提示 未找到镜像: %s", err)
+	}
+}
+
+func TestFlowPullExtraArgs(t *testing.T) {
+	e := setupFlow(t, amd64PairHandler())
+
+	code := runPull(context.Background(), []string{"node", "extraarg"})
+	if code != 2 {
+		t.Fatalf("多余位置参数应返回 2,实际 %d", code)
+	}
+	if !strings.Contains(e.err.String(), "多余的参数") || !strings.Contains(e.err.String(), "extraarg") {
+		t.Fatalf("期望提示多余参数,实际: %s", e.err.String())
+	}
+	if len(e.execCalls) != 0 {
+		t.Fatalf("参数错误不应执行 docker 命令: %v", e.execCalls)
+	}
+}
+
 func TestVersionText(t *testing.T) {
 	text := versionText()
 	if !strings.HasPrefix(text, "dockercn ") || text == "dockercn " {

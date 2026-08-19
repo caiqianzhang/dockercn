@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"text/tabwriter"
 )
@@ -40,7 +41,7 @@ func main() {
 
 // versionText 返回版本行,供 version 子命令使用。
 func versionText() string {
-	return "dockercn " + version
+	return fmt.Sprintf("dockercn %s (go %s %s/%s)", version, runtime.Version(), runtime.GOOS, runtime.GOARCH)
 }
 
 func runPull(ctx context.Context, args []string) int {
@@ -83,29 +84,41 @@ func runPull(ctx context.Context, args []string) int {
 		fmt.Fprintln(uiErrWriter, err)
 		return 1
 	}
-	candidates := FilterCandidates(resp.Results, ref)
+	raw := append([]Result{}, resp.Results...)
 
-	// 防漏查:docker.io 且精确未命中时补查 site=docker.io
-	if len(candidates) == 0 && ref.Registry == "docker.io" {
-		if resp2, err2 := SearchImages(ctx, ref.Raw, "docker.io", ""); err2 == nil {
-			candidates = FilterCandidates(resp2.Results, ref)
+	// 补查:名字未命中时再查一次。
+	// - docker.io 加 site 过滤(防 50 条截断漏查);
+	// - 带 tag 的请求改用纯名字查询,以区分「镜像不存在」与「tag 不存在」。
+	nameRef := ref
+	nameRef.Tag = ""
+	if len(FilterCandidates(raw, nameRef)) == 0 {
+		query, site := ref.Raw, ""
+		if ref.Registry == "docker.io" {
+			site = "docker.io"
+			if ref.Tag != "" {
+				query = ref.Name // 去掉 tag,才能搜到镜像名本身
+			}
+		} else if ref.Tag != "" {
+			query = ref.Name
+		}
+		if resp2, err2 := SearchImages(ctx, query, site, ""); err2 == nil {
+			raw = append(raw, resp2.Results...)
 		} else {
-			fmt.Fprintln(uiErrWriter, "补查 site=docker.io 失败:", err2)
+			fmt.Fprintln(uiErrWriter, "补查失败:", err2)
 		}
 	}
 
-	allName := candidates
-	candidates = FilterPlatform(candidates, plat)
-	// 合并同镜像(源仓库+tag+平台相同)的冗余 mirror 记录,否则 --yes 的「唯一」判定会因
-	// 同步站同时同步 docker.io/x 与 docker.io/library/x 而永远失败。
-	candidates = DedupeMirrors(candidates)
-	if len(candidates) == 0 {
-		fmt.Fprintln(uiErrWriter, noCandidateMessage(ref, allName, plat))
+	// 逐层匹配:名字 → 名字+tag → 名字+tag+平台,便于给出精确的「未找到」提示。
+	nameMatched := FilterCandidates(raw, nameRef)
+	tagMatched := FilterCandidates(raw, ref)
+	platMatched := DedupeMirrors(FilterPlatform(tagMatched, plat))
+	if len(platMatched) == 0 {
+		fmt.Fprintln(uiErrWriter, noCandidateMessage(ref, nameMatched, tagMatched, plat))
 		return 1
 	}
 
 	// 选择候选
-	chosen, err := chooseCandidate(ctx, candidates, *yes)
+	chosen, err := chooseCandidate(ctx, platMatched, *yes)
 	if err != nil {
 		fmt.Fprintln(uiErrWriter, err)
 		return 1
@@ -216,6 +229,12 @@ func parseKeywordArgs(fs *flag.FlagSet, args []string) (string, bool) {
 		fs.Usage()
 		return "", false
 	}
+	if fs.NArg() != 0 {
+		// 关键词只能有一个;多余的位置参数说明用法有误。
+		fmt.Fprintln(uiErrWriter, "多余的参数:", strings.Join(fs.Args(), " "))
+		fs.Usage()
+		return "", false
+	}
 	return keyword, true
 }
 
@@ -239,22 +258,36 @@ func chooseCandidate(ctx context.Context, candidates []Result, yes bool) (*Resul
 	return chosen, nil
 }
 
-// noCandidateMessage 生成「未找到镜像」或「该平台没有版本」的提示文案。
-func noCandidateMessage(ref ImageRef, allName []Result, plat string) string {
-	if len(allName) > 0 {
+// noCandidateMessage 生成「未找到镜像 / 无此 tag / 无此平台」的提示文案,
+// 三者区分,避免把「tag 没同步」误报成「镜像没同步」。
+func noCandidateMessage(ref ImageRef, nameMatched, tagMatched []Result, plat string) string {
+	if len(nameMatched) == 0 {
+		return fmt.Sprintf("未找到镜像 %s\n该镜像可能尚未同步,可前往 https://docker.aityp.com/manage/add 提交同步请求(需登录)", ref.Raw)
+	}
+	if ref.Tag != "" && len(tagMatched) == 0 {
 		var b strings.Builder
-		fmt.Fprintf(&b, "该镜像已同步,但没有 %s 平台的版本(已同步平台: ", plat)
+		fmt.Fprintf(&b, "镜像 %s 已同步,但没有 tag %s 的版本(已同步 tag: ", ref.Raw, ref.Tag)
 		seen := map[string]bool{}
-		for _, r := range allName {
-			if r.Platform != "" && !seen[r.Platform] {
-				seen[r.Platform] = true
-				fmt.Fprintf(&b, "%s ", r.Platform)
+		for _, r := range nameMatched {
+			if t := sourceTag(r.Source); t != "" && !seen[t] {
+				seen[t] = true
+				fmt.Fprintf(&b, "%s ", t)
 			}
 		}
 		fmt.Fprintf(&b, ")")
 		return b.String()
 	}
-	return fmt.Sprintf("未找到镜像 %s\n该镜像可能尚未同步,可前往 https://docker.aityp.com/manage/add 提交同步请求(需登录)", ref.Raw)
+	var b strings.Builder
+	fmt.Fprintf(&b, "镜像 %s 已同步,但没有 %s 平台的版本(已同步平台: ", ref.Raw, plat)
+	seen := map[string]bool{}
+	for _, r := range tagMatched {
+		if r.Platform != "" && !seen[r.Platform] {
+			seen[r.Platform] = true
+			fmt.Fprintf(&b, "%s ", r.Platform)
+		}
+	}
+	fmt.Fprintf(&b, ")")
+	return b.String()
 }
 
 // splitKeyword 取出参数中第一个不以 "-" 开头的参数作为关键词(镜像名),

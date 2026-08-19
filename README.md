@@ -85,7 +85,7 @@ dockercn version
 ## 开发
 
 ```bash
-go test ./...   # 单元测试(28 项)
+go test -race ./...   # 单元测试(33 项)+ 数据竞争检测
 go vet ./...    # 静态检查
 gofmt -l .      # 格式检查
 make build      # 构建并注入版本号
