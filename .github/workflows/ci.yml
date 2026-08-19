@@ -65,7 +65,7 @@ jobs:
       - name: 下载本平台产物
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release download "$GITHUB_REF_NAME" -p "${{ matrix.artifact }}"
+        run: gh release download "$GITHUB_REF_NAME" -R "${{ github.repository }}" -p "${{ matrix.artifact }}"
       - name: 真实运行验证
         shell: bash
         run: |
