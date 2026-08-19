@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os/exec"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -15,6 +16,8 @@ func TestMapArch(t *testing.T) {
 		"amd64":       "linux/amd64",
 		"aarch64":     "linux/arm64",
 		"armv7l":      "linux/arm",
+		"386":         "linux/386",
+		"ppc64":       "linux/ppc64",
 		"ppc64le":     "linux/ppc64le",
 		"loongarch64": "linux/loong64",
 		"weird":       "",
@@ -144,14 +147,20 @@ func TestDetectArchFallsBackToUname(t *testing.T) {
 	}
 }
 
-func TestDetectArchUnknown(t *testing.T) {
+// TestDetectArchFallsBackToRuntime 验证 docker info 与 uname 都失败/不可用时,
+// 回退到 Go 运行时已知的本机架构(Windows 无 uname 也能工作)。
+func TestDetectArchFallsBackToRuntime(t *testing.T) {
 	old := runCapture
 	runCapture = func(ctx context.Context, name string, args ...string) ([]byte, error) {
-		return []byte("weird-cpu"), nil
+		return nil, errors.New("所有探测失败")
 	}
 	defer func() { runCapture = old }()
 
-	if _, err := DetectArch(context.Background()); err == nil {
-		t.Fatal("未知架构应报错")
+	arch, err := DetectArch(context.Background())
+	if err != nil {
+		t.Fatalf("应回退 runtime.GOARCH,实际错误: %v", err)
+	}
+	if want := "linux/" + runtime.GOARCH; arch != want {
+		t.Fatalf("期望回退到 %s,实际 %s", want, arch)
 	}
 }

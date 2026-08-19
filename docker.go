@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"runtime"
 	"strings"
+	"time"
 )
 
 // execCommand 与 runCapture 可注入,便于测试模拟 docker 子进程。
@@ -25,9 +27,11 @@ func runDocker(ctx context.Context, args ...string) error {
 	return cmd.Run()
 }
 
-// CheckDocker 校验 docker 客户端与 daemon 可用。
+// CheckDocker 校验 docker 客户端与 daemon 可用(快速探测,5s 超时防 daemon 假死)。
 func CheckDocker(ctx context.Context) error {
-	out, err := runCapture(ctx, "docker", "version", "--format", "{{.Server.Version}}")
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	out, err := runCapture(probeCtx, "docker", "version", "--format", "{{.Server.Version}}")
 	if err != nil {
 		if msg := strings.TrimSpace(string(out)); msg != "" {
 			return fmt.Errorf("docker 不可用: %s", msg)
@@ -37,25 +41,33 @@ func CheckDocker(ctx context.Context) error {
 	return nil
 }
 
-// DetectArch 检测本机架构,优先 docker info,回退 uname -m。
+// DetectArch 检测本机架构:docker info → uname -m → runtime.GOARCH 三级回退,
+// 每次探测 5s 超时。第三级保证 Windows 等无 uname 的环境也能得到架构。
 func DetectArch(ctx context.Context) (string, error) {
-	if out, err := runCapture(ctx, "docker", "info", "--format", "{{.Architecture}}"); err == nil {
+	infoCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if out, err := runCapture(infoCtx, "docker", "info", "--format", "{{.Architecture}}"); err == nil {
 		if arch := mapArch(strings.TrimSpace(string(out))); arch != "" {
 			return arch, nil
 		}
 	}
-	out, err := runCapture(ctx, "uname", "-m")
-	if err != nil {
-		return "", fmt.Errorf("无法检测本机架构: %w", err)
+
+	unameCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if out, err := runCapture(unameCtx, "uname", "-m"); err == nil {
+		if arch := mapArch(strings.TrimSpace(string(out))); arch != "" {
+			return arch, nil
+		}
 	}
-	arch := mapArch(strings.TrimSpace(string(out)))
-	if arch == "" {
-		return "", fmt.Errorf("无法识别架构 %q", strings.TrimSpace(string(out)))
+
+	// 最终兜底:Go 运行时已知本机架构,零子进程开销。
+	if arch := mapArch(runtime.GOARCH); arch != "" {
+		return arch, nil
 	}
-	return arch, nil
+	return "", fmt.Errorf("无法识别架构 %q", runtime.GOARCH)
 }
 
-// mapArch 把 docker info / uname 的架构名映射为平台名(linux/<arch>)。
+// mapArch 把 docker info / uname / runtime.GOARCH 的架构名映射为平台名(linux/<arch>)。
 func mapArch(raw string) string {
 	switch strings.ToLower(raw) {
 	case "amd64", "x86_64":
@@ -64,6 +76,10 @@ func mapArch(raw string) string {
 		return "linux/arm64"
 	case "arm", "armv7l", "armv7":
 		return "linux/arm"
+	case "386":
+		return "linux/386"
+	case "ppc64":
+		return "linux/ppc64"
 	case "ppc64le":
 		return "linux/ppc64le"
 	case "s390x":

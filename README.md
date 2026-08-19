@@ -1,5 +1,7 @@
 # dockercn — 国内 Docker 镜像拉取助手
 
+![CI](https://github.com/caiqianzhang/gitcn/actions/workflows/ci.yml/badge.svg)
+
 `dockercn` 是一个纯 Go 标准库编写的命令行工具:自动查询「渡渡鸟容器同步站」的公共 API,找到镜像已同步到国内华为云 SWR 的地址,执行 `docker pull`,再把镜像重命名回你原本想写的名字。解决国内直连 Docker Hub / gcr.io / quay.io 等源拉取镜像困难的问题。
 
 > 同步站本身不隶属本项目,服务可用性以其为准。本项目只负责「查 → 拉 → 改名」。
@@ -10,6 +12,8 @@
   查询并下载国内镜像地址,完成后询问是否重命名为原始镜像名(非交互加 `--yes` 自动改名)。
 - **`dockercn search <关键词> [--site=docker.io] [--platform=linux/arm64]`**
   搜索并表格化展示 source / platform / size / createdAt / mirror。
+- **`dockercn version`(或 `-v` / `--version`)**
+  打印版本号(构建时由 `git describe` 注入,便于报告问题版本)。
 
 ## 安装
 
@@ -38,6 +42,9 @@ dockercn pull node
 
 # 搜索
 dockercn search node --platform linux/arm64
+
+# 版本
+dockercn version
 ```
 
 ## 工作原理
@@ -69,17 +76,21 @@ dockercn search node --platform linux/arm64
 ## 开发
 
 ```bash
-go test ./...   # 单元测试
+go test ./...   # 单元测试(28 项)
 go vet ./...    # 静态检查
 gofmt -l .      # 格式检查
+make build      # 构建并注入版本号
+make release    # 跨平台产物到 dist/
 ```
+
+CI:push/PR 自动跑格式、vet、测试;打 `v*` 标签时自动 `make release` 并发布 GitHub Release(产物为 5 个跨平台二进制)。
 
 ## 项目结构
 
 | 文件 | 职责 |
 |------|------|
 | `main.go` | CLI 入口、flag 解析、pull/search 流程编排 |
-| `api.go` | 同步站 API 客户端(复用 `httpClient`) |
+| `api.go` | 同步站 API 客户端(复用 `httpClient`,带 User-Agent) |
 | `match.go` | 镜像名解析/归一化/候选与平台匹配(纯函数) |
-| `docker.go` | docker 子进程封装、本机架构探测 |
-| `ui.go` | 数字编号候选选择、y/N 询问 |
+| `docker.go` | docker 子进程封装、本机架构探测(三级回退) |
+| `ui.go` | 输出收敛(uiWriter/uiErrWriter)、候选选择、y/N 询问 |

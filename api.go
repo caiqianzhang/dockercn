@@ -54,6 +54,8 @@ func SearchImages(ctx context.Context, query, site, platform string) (*SearchRes
 	if err != nil {
 		return nil, err
 	}
+	// 标注客户端身份,便于同步站统计与问题定位。
+	req.Header.Set("User-Agent", "dockercn/"+version)
 	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("请求同步站 API 失败: %w", err)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -14,6 +15,9 @@ func TestSearchImages(t *testing.T) {
 		}
 		if got := r.URL.Query().Get("search"); got != "node:22-alpine" {
 			t.Errorf("search 参数错误: %q", got)
+		}
+		if ua := r.UserAgent(); !strings.HasPrefix(ua, "dockercn/") {
+			t.Errorf("User-Agent 错误: %q", ua)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"count":1,"error":false,"aiprompt":"注意","results":[{"source":"docker.io/node:22-alpine","mirror":"swr.cn-north-4.myhuaweicloud.com/ddn-k8s/docker.io/node:22-alpine","platform":"linux/amd64","size":"157MB","createdAt":"2025-03-12T14:48:27.191+08:00"}]}`))

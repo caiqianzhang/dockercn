@@ -9,10 +9,12 @@ import (
 	"strings"
 )
 
-// uiReader/uiWriter 可注入,便于测试。
+// uiReader/uiErrWriter 可注入,便于测试。
+// uiWriter 收敛全部正常输出(进度、提示、表格),uiErrWriter 收敛全部错误输出。
 var (
-	uiReader io.Reader = os.Stdin
-	uiWriter io.Writer = os.Stdout
+	uiReader    io.Reader = os.Stdin
+	uiWriter    io.Writer = os.Stdout
+	uiErrWriter io.Writer = os.Stderr
 
 	uiBuf      *bufio.Reader // 复用同一个缓冲 reader,避免多个 Reader 吞掉后续输入
 	uiBufOwner io.Reader
