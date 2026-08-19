@@ -1,0 +1,9 @@
+# 编译产物
+/dockercn
+/dist/
+
+# 本环境会话记忆目录(勿入库)
+.remember/
+
+# 系统文件
+.DS_Store

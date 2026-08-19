@@ -1,0 +1,157 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"os/exec"
+	"slices"
+	"strings"
+	"testing"
+)
+
+func TestMapArch(t *testing.T) {
+	cases := map[string]string{
+		"x86_64":      "linux/amd64",
+		"amd64":       "linux/amd64",
+		"aarch64":     "linux/arm64",
+		"armv7l":      "linux/arm",
+		"ppc64le":     "linux/ppc64le",
+		"loongarch64": "linux/loong64",
+		"weird":       "",
+	}
+	for in, want := range cases {
+		if got := mapArch(in); got != want {
+			t.Errorf("mapArch(%q) = %q,期望 %q", in, got, want)
+		}
+	}
+}
+
+// fakeExec 记录发出的命令,并把每个子进程替换为 /bin/true(退出码 0)。
+func fakeExec(calls *[]string) func(context.Context, string, ...string) *exec.Cmd {
+	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		*calls = append(*calls, name+" "+strings.Join(args, " "))
+		return exec.CommandContext(ctx, "/bin/true")
+	}
+}
+
+// failingExec 对匹配 prefix 的命令返回一个必定启动失败的子进程,用于模拟 docker 报错。
+func failingExec(match string) func(context.Context, string, ...string) *exec.Cmd {
+	return func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if strings.HasPrefix(strings.Join(args, " "), match) {
+			return &exec.Cmd{
+				Path: "/nonexistent-dockercn-test-cmd",
+				Args: append([]string{name}, args...),
+			}
+		}
+		return exec.CommandContext(ctx, "/bin/true")
+	}
+}
+
+func TestRenameImageSkipsSameName(t *testing.T) {
+	old := execCommand
+	var calls []string
+	execCommand = fakeExec(&calls)
+	defer func() { execCommand = old }()
+
+	if err := renameImage(context.Background(), "node:1", "node:1"); err != nil {
+		t.Fatalf("src==dst 应直接成功,实际错误: %v", err)
+	}
+	if len(calls) != 0 {
+		t.Fatalf("src==dst 时不应执行任何 docker 命令(否则 rmi 会误删镜像),实际: %v", calls)
+	}
+}
+
+func TestRenameImageTagThenRemove(t *testing.T) {
+	old := execCommand
+	var calls []string
+	execCommand = fakeExec(&calls)
+	defer func() { execCommand = old }()
+
+	if err := renameImage(context.Background(), "mirror:1", "node:1"); err != nil {
+		t.Fatalf("renameImage 错误: %v", err)
+	}
+	want := []string{"docker tag mirror:1 node:1", "docker rmi mirror:1"}
+	if !slices.Equal(calls, want) {
+		t.Fatalf("命令序列不符: %v,期望 %v", calls, want)
+	}
+}
+
+func TestRenameImageRemoveFailStillOK(t *testing.T) {
+	old := execCommand
+	execCommand = failingExec("rmi")
+	defer func() { execCommand = old }()
+
+	// rmi 失败时已加好别名,应视为成功(仅警告),不返回错误。
+	if err := renameImage(context.Background(), "mirror:1", "node:1"); err != nil {
+		t.Fatalf("rmi 失败应返回 nil(仅警告),实际: %v", err)
+	}
+}
+
+func TestCheckDocker(t *testing.T) {
+	old := runCapture
+	runCapture = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("29.6.2"), nil
+	}
+	defer func() { runCapture = old }()
+
+	if err := CheckDocker(context.Background()); err != nil {
+		t.Fatalf("版本可查时应返回 nil: %v", err)
+	}
+}
+
+func TestCheckDockerUnavailableWithMessage(t *testing.T) {
+	old := runCapture
+	runCapture = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("Cannot connect to the Docker daemon"), errors.New("exit status 1")
+	}
+	defer func() { runCapture = old }()
+
+	err := CheckDocker(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "Cannot connect to the Docker daemon") {
+		t.Fatalf("期望错误包含 stderr 信息,实际: %v", err)
+	}
+}
+
+func TestDetectArchFromDockerInfo(t *testing.T) {
+	old := runCapture
+	runCapture = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "docker" {
+			return []byte("x86_64"), nil
+		}
+		return nil, errors.New("不应回退到 uname")
+	}
+	defer func() { runCapture = old }()
+
+	arch, err := DetectArch(context.Background())
+	if err != nil || arch != "linux/amd64" {
+		t.Fatalf("期望 linux/amd64,实际 %q err=%v", arch, err)
+	}
+}
+
+func TestDetectArchFallsBackToUname(t *testing.T) {
+	old := runCapture
+	runCapture = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		if name == "docker" {
+			return nil, errors.New("docker info 失败")
+		}
+		return []byte("aarch64"), nil
+	}
+	defer func() { runCapture = old }()
+
+	arch, err := DetectArch(context.Background())
+	if err != nil || arch != "linux/arm64" {
+		t.Fatalf("期望回退 uname 得 linux/arm64,实际 %q err=%v", arch, err)
+	}
+}
+
+func TestDetectArchUnknown(t *testing.T) {
+	old := runCapture
+	runCapture = func(ctx context.Context, name string, args ...string) ([]byte, error) {
+		return []byte("weird-cpu"), nil
+	}
+	defer func() { runCapture = old }()
+
+	if _, err := DetectArch(context.Background()); err == nil {
+		t.Fatal("未知架构应报错")
+	}
+}
